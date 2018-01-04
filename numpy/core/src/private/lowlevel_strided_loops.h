@@ -542,7 +542,6 @@ npy_bswap8_unaligned(char * x)
 
 /* Increment to the next n-dimensional coordinate for one raw array */
 #define NPY_RAW_ITER_ONE_NEXT(idim, ndim, coord, shape, data, strides) \
-	    printf("\tinc\n"); \
             for ((idim) = 1; (idim) < (ndim); ++(idim)) { \
                 if (++(coord)[idim] == (shape)[idim]) { \
                     (coord)[idim] = 0; \
@@ -550,7 +549,6 @@ npy_bswap8_unaligned(char * x)
                 } \
                 else { \
                     (data) += (strides)[idim]; \
-		    printf("Next1 on idim = %d\n", idim); \
                     break; \
                 } \
             } \
