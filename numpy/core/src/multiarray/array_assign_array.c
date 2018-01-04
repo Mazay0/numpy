@@ -24,6 +24,10 @@
 
 #include "array_assign.h"
 
+#include "omp.h"
+
+#define NPY_MAXTHREADS 128
+
 /*
  * Assigns the array from 'src' to 'dst'. The strides must already have
  * been broadcast.
@@ -41,10 +45,13 @@ raw_array_assign_array(int ndim, npy_intp *shape,
     npy_intp src_strides_it[NPY_MAXDIMS];
     npy_intp coord[NPY_MAXDIMS];
 
-    PyArray_StridedUnaryOp *stransfer = NULL;
-    NpyAuxData *transferdata = NULL;
+    PyArray_StridedUnaryOp *stransfer[NPY_MAXTHREADS];
+    NpyAuxData *transferdata[NPY_MAXTHREADS];
     int aligned, needs_api = 0;
     npy_intp src_itemsize = src_dtype->elsize;
+    int num_threads, thread_i;
+
+    num_threads = omp_get_max_threads();
 
     NPY_BEGIN_THREADS_DEF;
 
@@ -77,31 +84,52 @@ raw_array_assign_array(int ndim, npy_intp *shape,
         dst_strides_it[0] = -dst_strides_it[0];
     }
 
-    /* Get the function to do the casting */
-    if (PyArray_GetDTypeTransferFunction(aligned,
-                        src_strides_it[0], dst_strides_it[0],
-                        src_dtype, dst_dtype,
-                        0,
-                        &stransfer, &transferdata,
-                        &needs_api) != NPY_SUCCEED) {
-        return -1;
+    printf("raw_array_assign_array: num_threads =  %d\n", num_threads);
+
+    for(thread_i = 0; thread_i < num_threads; ++thread_i) {
+        /* Get the function to do the casting */
+	if (PyArray_GetDTypeTransferFunction(aligned,
+	                src_strides_it[0], dst_strides_it[0],
+	                src_dtype, dst_dtype,
+	                0,
+	                &stransfer[thread_i], &transferdata[thread_i],
+	                &needs_api) != NPY_SUCCEED) {
+	    return -1;
+        }
     }
+
 
     if (!needs_api) {
         NPY_BEGIN_THREADS;
     }
 
+    printf("raw_array_assign_array: shape_it[0] = %d\n", shape_it[0]);
+
     NPY_RAW_ITER_START(idim, ndim, coord, shape_it) {
         /* Process the innermost dimension */
-        stransfer(dst_data, dst_strides_it[0], src_data, src_strides_it[0],
-                    shape_it[0], src_itemsize, transferdata);
+	#pragma omp parallel private(thread_i)
+	{
+	    thread_i = omp_get_thread_num();
+	    int t_cnt = shape_it[0]/num_threads;
+	    int start = t_cnt * thread_i;
+	    int finish = t_cnt * (1 + thread_i);
+	    if (thread_i == num_threads-1) {
+		finish = shape_it[0];
+	    }
+	    int cnt = finish - start;
+	    //printf("raw_array_assign_array: thread_i = %d %d - %d = %d\n", thread_i, start, finish, cnt);
+            (stransfer[thread_i])(dst_data + start*dst_strides_it[0], dst_strides_it[0], src_data + start*src_strides_it[0], src_strides_it[0],
+	                cnt, src_itemsize, transferdata[thread_i]);
+	}
     } NPY_RAW_ITER_TWO_NEXT(idim, ndim, coord, shape_it,
                             dst_data, dst_strides_it,
                             src_data, src_strides_it);
 
     NPY_END_THREADS;
 
-    NPY_AUXDATA_FREE(transferdata);
+    for(thread_i = 0; thread_i < num_threads; ++thread_i) {
+	NPY_AUXDATA_FREE(transferdata[thread_i]);
+    }
 
     return (needs_api && PyErr_Occurred()) ? -1 : 0;
 }
