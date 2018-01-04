@@ -24,6 +24,8 @@
 
 #include "array_assign.h"
 
+#include <omp.h>
+
 /*
  * Assigns the scalar value to every element of the destination raw array.
  *
@@ -77,6 +79,14 @@ raw_array_assign_scalar(int ndim, npy_intp *shape,
             nitems *= shape_it[i];
         }
         NPY_BEGIN_THREADS_THRESHOLDED(nitems);
+    }
+
+    printf("raw_array_assign_scalar ndim=%d\n", ndim);
+ 
+    # pragma omp parallel private(idim, coord, src_data)
+    {
+	printf("Thread rank: %d\t%p\n", omp_get_thread_num(), &src_data);
+	
     }
 
     NPY_RAW_ITER_START(idim, ndim, coord, shape_it) {
