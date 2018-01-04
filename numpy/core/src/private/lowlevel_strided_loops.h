@@ -568,7 +568,6 @@ npy_bswap8_unaligned(char * x)
                 else { \
                     (dataA) += (stridesA)[idim]; \
                     (dataB) += (stridesB)[idim]; \
-		    printf("Next2 on idim = %d, coord[0] = %d\n", idim, coord[0]); \
                     break; \
                 } \
             } \
