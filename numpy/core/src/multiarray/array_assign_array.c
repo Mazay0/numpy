@@ -85,19 +85,19 @@ npy_intp init_parallel_section(int ndim, npy_intp *shape, npy_intp *coord,  char
 
 #define STR(x) #x
 #define STRINGIFY(x) STR(x) 
-#define CONCATENATE(X,Y1,Y2,Y3) X ( Y1 , Y2 , Y3 )
+#define CONCATENATE(X,Y1,Y2,Y3,N) X ( Y1 , Y2 , Y3 ) num_threads ( N )
 
-#define OMP_PARA_TWO( coord,  dataA,  dataB) \
-  _Pragma( STRINGIFY( CONCATENATE(omp parallel firstprivate, coord, dataA, dataB) ) )
+#define OMP_PARA_TWO( coord,  dataA,  dataB, num_threads) \
+  _Pragma( STRINGIFY( CONCATENATE(omp parallel firstprivate, coord, dataA, dataB, num_threads) ) )
 
 
 
 
 /* Start raw iteration */
 #define NPY_RAW_PAR_ITER_TWO_START(idim, ndim, coord, shape, \
-				dataA, stridesA, dataB, stridesB) \
+				dataA, stridesA, dataB, stridesB, num_threads) \
 	{ \
-	OMP_PARA_TWO(coord, dataA, dataB) \
+	OMP_PARA_TWO(coord, dataA, dataB, num_threads) \
 	{ \
 	    npy_intp cnt = init_parallel_section((ndim), (shape), (coord), &(dataA), (stridesA), &(dataB), (stridesB)); \
 	    /* printf("[ cnt = %d ] dataA = %p dataB = %p\n", cnt, dataA, dataB); */ \
@@ -147,9 +147,8 @@ raw_array_assign_array(int ndim, npy_intp *shape,
     NpyAuxData *transferdata[NPY_MAXTHREADS];
     int aligned, needs_api = 0;
     npy_intp src_itemsize = src_dtype->elsize;
-    int num_threads, thread_i;
+    int num_threads, thread_i, ndim_external;
 
-    num_threads = omp_get_max_threads();
 
     NPY_BEGIN_THREADS_DEF;
 
@@ -183,6 +182,19 @@ raw_array_assign_array(int ndim, npy_intp *shape,
     }
 
     //printf("raw_array_assign_array: num_threads =  %d\n", num_threads);
+    
+    ndim_external = 1;
+    for (int idim=1; idim < ndim; ++idim) {
+		ndim_external *= shape[idim];
+    }
+    
+    if (ndim_external * shape[0] <= 1024) { // arbitrarily selected threshold TODO: test for optimal
+    //if (1) {
+    	num_threads = 1;
+    } else {
+	    int max_threads = omp_get_max_threads();
+    	num_threads = (max_threads < ndim_external) ? max_threads : ndim_external;
+	}
 
     for(thread_i = 0; thread_i < num_threads; ++thread_i) {
         /* Get the function to do the casting */
@@ -201,41 +213,44 @@ raw_array_assign_array(int ndim, npy_intp *shape,
         NPY_BEGIN_THREADS;
     }
 
-    /*for(idim=0; idim < ndim; ++idim)
+    /*
+    for(idim=0; idim < ndim; ++idim)
     {
         printf("raw_array_assign_array: shape_it[%d] = %d\n", idim, shape_it[idim]);
     }*/
 
-	//printf("START dst_data = %p \t src_data = %p  \n",  dst_data, src_data);
 	char *dst_data_1 = dst_data;
 	char *src_data_1 = src_data;
 
-#if 1
+	if (num_threads > 1) {
+		//printf("parallel %d %d\n", num_threads, ndim_external);
+		NPY_RAW_PAR_ITER_TWO_START(idim, ndim, coord, shape_it, 
+								dst_data, dst_strides_it, 
+								src_data, src_strides_it, 
+								num_threads) {
+			thread_i = omp_get_thread_num();
+			//printf("%d ) coord[1] = %p \t dst_data = %p \t src_data = %p \t %d \t %d  \n", thread_i, coord[1],  dst_data-dst_data_1, src_data-src_data_1 , dst_strides_it[0], src_strides_it[0]);
+			
+		    (stransfer[thread_i])(dst_data, dst_strides_it[0], src_data, src_strides_it[0],
+			            shape_it[0], src_itemsize, transferdata[thread_i]);
+			            
+		} NPY_RAW_PAR_ITER_TWO_NEXT(idim, ndim, coord, shape_it,
+		                        dst_data, dst_strides_it,
+		                        src_data, src_strides_it)
+	} else {
+		//printf("serial %d %d\n", num_threads, ndim_external);
+		NPY_RAW_ITER_START(idim, ndim, coord, shape_it) {
+			//thread_i = omp_get_thread_num();
+			//printf("%d ) coord[1] = %p \t dst_data = %p \t src_data = %p \t %d \t %d  \n", thread_i, coord[1],  dst_data-dst_data_1, src_data-src_data_1 , dst_strides_it[0], src_strides_it[0]);
+			
+		    (stransfer[0])(dst_data, dst_strides_it[0], src_data, src_strides_it[0],
+		                shape_it[0], src_itemsize, transferdata[0]);
+		                
+		} NPY_RAW_ITER_TWO_NEXT(idim, ndim, coord, shape_it,
+		                        dst_data, dst_strides_it,
+								src_data, src_strides_it);
 
-    NPY_RAW_PAR_ITER_TWO_START(idim, ndim, coord, shape_it, dst_data, dst_strides_it, src_data, src_strides_it) {
-	    thread_i = omp_get_thread_num();
-	    //printf("%d ) coord[1] = %p \t dst_data = %p \t src_data = %p \t %d \t %d  \n", thread_i, coord[1],  dst_data-dst_data_1, src_data-src_data_1 , dst_strides_it[0], src_strides_it[0]);
-	    
-        (stransfer[thread_i])(dst_data, dst_strides_it[0], src_data, src_strides_it[0],
-	                shape_it[0], src_itemsize, transferdata[thread_i]);
-	                
-    } NPY_RAW_PAR_ITER_TWO_NEXT(idim, ndim, coord, shape_it,
-                            dst_data, dst_strides_it,
-                            src_data, src_strides_it)
-#elif
-
-    NPY_RAW_ITER_START(idim, ndim, coord, shape_it) {
-	    thread_i = omp_get_thread_num();
-	    //printf("%d ) coord[1] = %p \t dst_data = %p \t src_data = %p \t %d \t %d  \n", thread_i, coord[1],  dst_data-dst_data_1, src_data-src_data_1 , dst_strides_it[0], src_strides_it[0]);
-	    
-        (stransfer[thread_i])(dst_data, dst_strides_it[0], src_data, src_strides_it[0],
-                    shape_it[0], src_itemsize, transferdata[thread_i]);
-                    
-    } NPY_RAW_ITER_TWO_NEXT(idim, ndim, coord, shape_it,
-                            dst_data, dst_strides_it,
-							src_data, src_strides_it);
-
-#endif
+	}
 
     NPY_END_THREADS;
 
